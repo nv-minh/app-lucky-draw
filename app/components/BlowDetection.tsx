@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 
 export default function BlowDetection() {
   const [blowCount, setBlowCount] = useState(0);
-  const [blowThreshold, setBlowThreshold] = useState(30);
+  const [blowThreshold, setBlowThreshold] = useState(25);
   const [blowDuration, setBlowDuration] = useState(300);
   const [blowCooldown, setBlowCooldown] = useState(500);
   const [isBlowActive, setIsBlowActive] = useState(false);
