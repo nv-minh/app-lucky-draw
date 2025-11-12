@@ -1,8 +1,8 @@
 "use client";
 
-import BlowDetection from "@/app/components/BlowDetection";
-import ShakeDetection from "@/app/components/ShakeDetection";
 import { useState } from "react";
+import ShakeDetection from "./components/ShakeDetection";
+import BlowDetection from "./components/BlowDetection";
 
 type TabType = "shake" | "blow";
 
