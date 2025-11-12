@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 
 export default function BlowDetection() {
   const [blowCount, setBlowCount] = useState(0);
-  const [blowThreshold, setBlowThreshold] = useState(40);
+  const [blowThreshold, setBlowThreshold] = useState(30);
   const [blowDuration, setBlowDuration] = useState(300);
   const [blowCooldown, setBlowCooldown] = useState(500);
   const [isBlowActive, setIsBlowActive] = useState(false);
@@ -100,6 +100,10 @@ export default function BlowDetection() {
 
       const microphone = audioContext.createMediaStreamSource(stream);
       microphone.connect(analyser);
+      const silent = audioContext.createGain();
+      silent.gain.value = 0;
+      analyser.connect(silent);
+      silent.connect(audioContext.destination);
 
       setBlowPermissionStatus("granted");
       setIsBlowActive(true);
@@ -209,7 +213,7 @@ export default function BlowDetection() {
         </div>
         <input
           type="range"
-          min="30"
+          min="10"
           max="150"
           value={blowThreshold}
           onChange={(e) => setBlowThreshold(Number(e.target.value))}
