@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from "react";
 export default function Home() {
   const [shakeCount, setShakeCount] = useState(0);
   const [sensitivity, setSensitivity] = useState(30);
+  const [cooldown, setCooldown] = useState(500);
   const [isActive, setIsActive] = useState(false);
   const [permissionStatus, setPermissionStatus] = useState<
     "unknown" | "granted" | "denied"
@@ -16,7 +17,6 @@ export default function Home() {
   const lastY = useRef(0);
   const lastZ = useRef(0);
   const lastShakeTime = useRef(0);
-  const SHAKE_COOLDOWN = 500; // milliseconds
 
   const handleDeviceMotion = (event: DeviceMotionEvent) => {
     if (!isActive) return;
@@ -49,7 +49,7 @@ export default function Home() {
     const currentTime = Date.now();
     if (
       totalDelta > sensitivity &&
-      currentTime - lastShakeTime.current > SHAKE_COOLDOWN
+      currentTime - lastShakeTime.current > cooldown
     ) {
       lastShakeTime.current = currentTime;
       setShakeCount((prev) => prev + 1);
@@ -65,7 +65,6 @@ export default function Home() {
     setErrorMessage("");
 
     try {
-      // Check if DeviceMotionEvent requires permission (iOS 13+)
       if (typeof (DeviceMotionEvent as any).requestPermission === "function") {
         const permission = await (DeviceMotionEvent as any).requestPermission();
 
@@ -123,7 +122,6 @@ export default function Home() {
             </h1>
             <p className="text-gray-600">Shake Demo - Year End Party</p>
           </div>
-
           {/* Shake Counter Display */}
           <div className="bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl p-8 text-center shadow-lg">
             <p className="text-white text-sm font-medium mb-2">Shake Count</p>
@@ -132,7 +130,6 @@ export default function Home() {
               {isActive ? "📱 Shake your device!" : "⏸️ Detection paused"}
             </p>
           </div>
-
           {/* Sensitivity Control */}
           <div className="space-y-3">
             <div className="flex justify-between items-center">
@@ -162,7 +159,30 @@ export default function Home() {
               </p>
             )}
           </div>
-
+          /* Shake Cooldown */
+          <div className="space-y-3">
+            <div className="flex justify-between items-center">
+              <label className="text-sm font-medium text-gray-700">
+                Shake Cooldown
+              </label>
+              <span className="text-sm font-bold text-purple-600">
+                {cooldown}
+              </span>
+            </div>
+            <input
+              type="range"
+              min="100"
+              max="1000"
+              value={cooldown}
+              onChange={(e) => setCooldown(Number(e.target.value))}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-purple-600"
+              disabled={isActive}
+            />
+            <div className="flex justify-between text-xs text-gray-500">
+              <span>100ms</span>
+              <span>1000ms</span>
+            </div>
+          </div>
           {/* Control Buttons */}
           <div className="space-y-3">
             {!isActive ? (
@@ -188,14 +208,12 @@ export default function Home() {
               🔄 Reset Counter
             </button>
           </div>
-
           {/* Error Message */}
           {errorMessage && (
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <p className="text-sm text-red-700">{errorMessage}</p>
             </div>
           )}
-
           {/* Status Info */}
           <div className="bg-gray-50 rounded-xl p-4 space-y-2">
             <div className="flex justify-between items-center text-sm">
@@ -228,9 +246,7 @@ export default function Home() {
             </div>
             <div className="flex justify-between items-center text-sm">
               <span className="text-gray-600">Cooldown:</span>
-              <span className="font-medium text-gray-800">
-                {SHAKE_COOLDOWN}ms
-              </span>
+              <span className="font-medium text-gray-800">{cooldown}ms</span>
             </div>
           </div>
         </div>
