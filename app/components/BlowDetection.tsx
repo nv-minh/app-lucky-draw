@@ -11,9 +11,9 @@ export default function BlowDetection() {
   const [blowErrorMessage, setBlowErrorMessage] = useState("");
   const [currentVolume, setCurrentVolume] = useState(0);
 
-  const [serRatioThreshold, setSerRatioThreshold] = useState(3.5);
+  const [serRatioThreshold, setSerRatioThreshold] = useState(2.2);
   const [blowDuration, setBlowDuration] = useState(100);
-  const [blowCooldown, setBlowCooldown] = useState(600);
+  const [blowCooldown, setBlowCooldown] = useState(500);
   const [isCalibrating, setIsCalibrating] = useState(false);
   const [useSuppression, setUseSuppression] = useState(false);
   const [showDebug, setShowDebug] = useState(true);
@@ -24,16 +24,17 @@ export default function BlowDetection() {
     E_low: 0,
     E_mid: 0,
     ratio: 0,
+    centroid: 0,
     candidate: false,
   });
 
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const micStreamRef = useRef<MediaStream | null>(null); 
+  const micStreamRef = useRef<MediaStream | null>(null); // Nguồn từ mic
   const rafIdRef = useRef<number | null>(null);
 
-  const fileAudioBufferRef = useRef<AudioBuffer | null>(null); 
-  const fileSourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
+  const fileAudioBufferRef = useRef<AudioBuffer | null>(null); // Buffer âm thanh
+  const fileSourceNodeRef = useRef<AudioBufferSourceNode | null>(null); // Nguồn từ file
   const [fileName, setFileName] = useState("");
 
   const debugHistoryRef = useRef<string[]>([]);
@@ -55,10 +56,12 @@ export default function BlowDetection() {
   const calibSumMidSqRef = useRef(0);
   const calibCountRef = useRef(0);
 
+  // Refs cho logic đếm
   const frameCountRef = useRef(0);
   const missedFramesRef = useRef(0);
-  const MAX_MISSED_FRAMES = 2;
+  const MAX_MISSED_FRAMES = 2; // "Grace period"
 
+  // Helper lấy AudioContext
   const getAudioContext = () => {
     if (
       !audioContextRef.current ||
@@ -70,6 +73,7 @@ export default function BlowDetection() {
     return audioContextRef.current;
   };
 
+  // === SỬA HÀM getBands ĐỂ TRẢ VỀ hzPerBin ===
   const getBands = (
     dataArray: Uint8Array,
     bufferLength: number,
@@ -96,12 +100,14 @@ export default function BlowDetection() {
     return {
       E_low,
       E_mid,
+      hzPerBin, // Trả về để dùng cho centroid
     };
   };
 
+  // Download log (đã thêm centroid)
   const downloadDebugHistory = () => {
     if (!debugHistoryRef.current.length) return;
-    const header = "time_ms,E_low,E_mid,SER,candidate";
+    const header = "time_ms,E_low,E_mid,SER,centroid_Hz,candidate"; // Thêm centroid_Hz
     const content = [header, ...debugHistoryRef.current].join("\n");
     const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -120,18 +126,45 @@ export default function BlowDetection() {
     setHistoryCount(0);
   };
 
-  const decideCandidate = (features: { E_low: number; ratio: number }) => {
-    if (isCalibrating) return false;
-
-    const energyOk =
-      features.E_low >
-      Math.max(50, baselineLowRef.current + 2 * baselineLowStdRef.current);
-
-    const ratioOk = features.ratio > serRatioThreshold;
-
-    return energyOk && ratioOk;
+  // === THÊM LẠI HÀM computeCentroid ===
+  const computeCentroid = (
+    dataArray: Uint8Array,
+    bufferLength: number,
+    hzPerBin: number
+  ) => {
+    let num = 0;
+    let den = 0.000001; // Tránh chia cho 0
+    for (let i = 0; i < bufferLength; i++) {
+      const p = dataArray[i]; // power
+      num += p * (i * hzPerBin); // power * frequency
+      den += p; // total power
+    }
+    return num / den; // weighted average
   };
 
+  // === HÀM QUYẾT ĐỊNH (3 ĐIỀU KIỆN) ===
+  const decideCandidate = (features: {
+    E_low: number;
+    ratio: number;
+    centroid: number;
+  }) => {
+    if (isCalibrating) return false;
+
+    // ĐK 1: Năng lượng (Ngưỡng 120)
+    const energyOk =
+      features.E_low >
+      Math.max(120, baselineLowRef.current + 3 * baselineLowStdRef.current);
+
+    // ĐK 2: Tỷ lệ SER (Ngưỡng do người dùng chọn)
+    const ratioOk = features.ratio > serRatioThreshold;
+
+    // ĐK 3: Trọng tâm phổ (Ngưỡng 1000Hz)
+    const centroidOk = features.centroid < 1500;
+
+    return energyOk && ratioOk && centroidOk; // Phải thỏa mãn CẢ BA
+  };
+
+  // === HÀM PROCESSFRAME (ĐÃ CẬP NHẬT) ===
   const processFrame = () => {
     if (!analyserRef.current || !audioContextRef.current) return;
     const analyser = analyserRef.current;
@@ -140,27 +173,28 @@ export default function BlowDetection() {
     analyser.getByteFrequencyData(dataArray);
     const sampleRate = audioContextRef.current.sampleRate;
 
-    const { E_low, E_mid } = getBands(dataArray, bufferLength, sampleRate);
-
-    // === BẠN ĐÃ THÊM LOGS Ở ĐÂY ===
-    if (showDebug) {
-      // Thêm check showDebug để đỡ spam console
-      console.log("E_low", E_low);
-      console.log("E_mid", E_mid);
-    }
-
+    // Tính toán các chỉ số
+    const { E_low, E_mid, hzPerBin } = getBands(
+      dataArray,
+      bufferLength,
+      sampleRate
+    );
+    const centroid = computeCentroid(dataArray, bufferLength, hzPerBin);
     const ratio = E_low / (E_mid + 0.01);
 
     if (showDebug) {
-      // Thêm check showDebug
-      console.log("ratio", ratio);
+      console.log(
+        `E_low: ${E_low.toFixed(0)}, E_mid: ${E_mid.toFixed(
+          0
+        )}, Ratio: ${ratio.toFixed(1)}, Centroid: ${centroid.toFixed(0)}`
+      );
     }
-    // =============================
 
     setCurrentVolume(Math.round(E_low));
     const now = Date.now();
 
     if (isCalibrating) {
+      // Logic calibration (giữ nguyên)
       calibSumLowRef.current += E_low;
       calibSumLowSqRef.current += E_low * E_low;
       calibSumMidRef.current += E_mid;
@@ -180,7 +214,10 @@ export default function BlowDetection() {
         calibEndTimeRef.current = null;
       }
     } else {
-      const candidate = decideCandidate({ E_low, ratio });
+      // Truyền centroid vào hàm quyết định
+      const candidate = decideCandidate({ E_low, ratio, centroid });
+
+      // Logic đếm với grace period (giữ nguyên)
       if (candidate) {
         missedFramesRef.current = 0;
         if (!isCurrentlyBlowingRef.current) {
@@ -211,14 +248,17 @@ export default function BlowDetection() {
         }
       }
 
+      // Cập nhật UI debug
       if (frameCountRef.current % 6 === 0) {
         setDebugValues({
           E_low: Math.round(E_low),
           E_mid: Math.round(E_mid),
           ratio: Math.round(ratio * 10) / 10,
+          centroid: Math.round(centroid),
           candidate,
         });
 
+        // Ghi log
         if (isLogging && !isCalibrating) {
           const elapsed = startTimeRef.current
             ? Date.now() - startTimeRef.current
@@ -228,6 +268,7 @@ export default function BlowDetection() {
             String(Math.round(E_low)),
             String(Math.round(E_mid)),
             ratio.toFixed(2),
+            String(Math.round(centroid)),
             candidate ? "1" : "0",
           ].join(",");
           debugHistoryRef.current.push(line);
@@ -240,6 +281,9 @@ export default function BlowDetection() {
     if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
     rafIdRef.current = requestAnimationFrame(processFrame);
   };
+
+  // (Các hàm requestMicrophoneAndStart, handleFileChange, processFileAndStart
+  //  không thay đổi so với phiên bản trước)
 
   const requestMicrophoneAndStart = async () => {
     setBlowErrorMessage("");
@@ -330,13 +374,15 @@ export default function BlowDetection() {
 
     const analyser = audioContext.createAnalyser();
     analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.3; 
+    analyser.smoothingTimeConstant = 0.3; // Phải giống hệt cài đặt live
     analyserRef.current = analyser;
 
+    // Tạo nguồn từ buffer file
     const source = audioContext.createBufferSource();
     source.buffer = fileAudioBufferRef.current;
-    fileSourceNodeRef.current = source;
+    fileSourceNodeRef.current = source; // Lưu ref để stop
 
+    // Nối file -> analyser -> loa (để bạn nghe)
     source.connect(analyser);
     analyser.connect(audioContext.destination);
 
@@ -345,17 +391,21 @@ export default function BlowDetection() {
     debugHistoryRef.current = [];
     setHistoryCount(0);
 
+    // Bắt đầu vòng lặp và phát file
     if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
     rafIdRef.current = requestAnimationFrame(processFrame);
     source.start();
 
+    // Tự động dừng khi file phát xong
     source.onended = () => {
       stopDetection();
     };
 
+    // Chạy calibration (giả định file có 1.2s im lặng ở đầu)
     calibrateEnvironment(1200);
   };
 
+  // Hàm stop chung
   const stopDetection = () => {
     setIsBlowActive(false);
     if (rafIdRef.current !== null) {
@@ -363,25 +413,30 @@ export default function BlowDetection() {
       rafIdRef.current = null;
     }
 
+    // Dừng nguồn mic (nếu có)
     if (micStreamRef.current) {
       micStreamRef.current.getTracks().forEach((t) => t.stop());
       micStreamRef.current = null;
     }
 
+    // Dừng nguồn file (nếu có)
     if (fileSourceNodeRef.current) {
-      fileSourceNodeRef.current.onended = null;
+      fileSourceNodeRef.current.onended = null; // Hủy onended để tránh gọi lại
       try {
         fileSourceNodeRef.current.stop();
       } catch (e) {
+        // Bỏ qua lỗi nếu đã stop
       }
       fileSourceNodeRef.current = null;
     }
 
+    // Đóng context
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
     }
 
+    // Reset logic đếm
     isCurrentlyBlowingRef.current = false;
     hasCountedThisBlowRef.current = false;
     blowStartTimeRef.current = 0;
@@ -409,11 +464,13 @@ export default function BlowDetection() {
   };
 
   useEffect(() => {
+    // Cleanup khi component unmount
     return () => {
       stopDetection();
     };
   }, []);
 
+  // --- BẮT ĐẦU JSX (ĐÃ CẬP NHẬT DEBUG UI) ---
   return (
     <>
       {/* Blow Counter Display */}
@@ -453,31 +510,30 @@ export default function BlowDetection() {
         <div className="bg-white border rounded-xl p-4 text-xs text-gray-700 space-y-2">
           <div className="flex items-center justify-between">
             <span className="font-medium">Calibrating</span>
-
             <span
               className={isCalibrating ? "text-amber-600" : "text-gray-500"}
             >
               {isCalibrating ? "running..." : "idle"}
             </span>
           </div>
-
+          {/* Cập nhật JSX debug để hiển thị centroid */}
           <div className="grid grid-cols-2 gap-x-6 gap-y-1">
             <div>
               E_low: <span className="font-semibold">{debugValues.E_low}</span>
             </div>
-
             <div>
               E_mid: <span className="font-semibold">{debugValues.E_mid}</span>
             </div>
-
             <div>
               Ratio: <span className="font-semibold">{debugValues.ratio}x</span>
             </div>
+            <div>
+              Centroid:{" "}
+              <span className="font-semibold">{debugValues.centroid} Hz</span>
+            </div>
           </div>
-
           <div className="flex items-center justify-between pt-1">
             <span>Candidate</span>
-
             <span
               className={
                 debugValues.candidate
@@ -488,12 +544,10 @@ export default function BlowDetection() {
               {debugValues.candidate ? "YES" : "no"}
             </span>
           </div>
-
           <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t">
             <div className="text-xs text-gray-600">
               Samples: <span className="font-semibold">{historyCount}</span>
             </div>
-
             <div className="flex items-center gap-2">
               <label className="flex items-center gap-1">
                 <input
@@ -503,7 +557,6 @@ export default function BlowDetection() {
                 />
                 Record
               </label>
-
               <button
                 onClick={downloadDebugHistory}
                 disabled={!historyCount}
@@ -511,7 +564,6 @@ export default function BlowDetection() {
               >
                 ⬇️ Download .txt
               </button>
-
               <button
                 onClick={clearDebugHistory}
                 disabled={!historyCount}
@@ -524,7 +576,7 @@ export default function BlowDetection() {
         </div>
       )}
 
-      {/* === MỚI: SECTION TẢI FILE === */}
+      {/* === SECTION TẢI FILE === */}
       <div className="space-y-3 bg-gray-50 border rounded-xl p-4">
         <p className="text-sm font-medium text-gray-800">
           Debug Bằng File Audio
